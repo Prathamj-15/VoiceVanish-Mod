@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "id": "voicevanish",
+  "version": "${version}",
+  "name": "Voice Vanish",
+  "description": "Say the name of a block or mob in voice chat and it vanishes from the world around you.",
+  "authors": ["You"],
+  "license": "MIT",
+  "environment": "*",
+  "entrypoints": {
+    "main": ["com.voicevanish.VoiceVanishMod"],
+    "voicechat": ["com.voicevanish.VanishVoicechatPlugin"]
+  },
+  "depends": {
+    "fabricloader": ">=0.16.0",
+    "minecraft": "1.21.1",
+    "java": ">=21",
+    "fabric-api": "*",
+    "voicechat": "*"
+  }
+}
