@@ -4,6 +4,9 @@ on:
   push:
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -29,3 +32,12 @@ jobs:
           path: |
             build/libs/*.jar
             !build/libs/*-sources.jar
+
+      - name: Publish jar as a GitHub Release
+        if: github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          JAR=$(ls build/libs/voicevanish-*.jar | grep -v sources | head -n 1)
+          TAG="build-${{ github.run_number }}"
+          gh release create "$TAG" "$JAR" --title "Voice Vanish build ${{ github.run_number }}" --notes "Put this jar in your server's mods folder." --latest
