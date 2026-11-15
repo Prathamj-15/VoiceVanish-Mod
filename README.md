@@ -46,19 +46,24 @@ If Gradle cannot find a dependency version, edit `gradle.properties`:
 | `/voicevanish on` / `off` | Master switch. Turn it off while you are building things! |
 | `/voicevanish status` | Shows settings and whether the speech model loaded |
 | `/voicevanish radius <1-64>` | Change the radius in chunks (default 12) |
-| `/voicevanish wakeword <word>` | Require a word first, e.g. wake word `delete` -> say "delete stone" |
-| `/voicevanish wakeword off` | Remove the wake word |
-| `/voicevanish heard on/off` | Show what the mod heard on your action bar |
+| `/voicevanish confidence <0.0-1.0>` | How sure the mod must be of a word (default 0.6). Lower if words get missed, higher if things vanish by mistake |
+| `/voicevanish heard on/off` | Show the recognized block/mob names on your action bar |
 
 Settings are saved in `config/voicevanish.json`.
+
+## How listening works
+
+There is no wake word: any block or mob name you say, alone or inside a sentence, is deleted.
+To keep recognition accurate, the speech model is told to listen **only** for Minecraft block and mob
+names, so ordinary words are ignored instead of being misheard as something else. Words the model is
+not confident about are dropped (see `minConfidence`). Names that contain a word the model does not
+have in its dictionary (the server log lists some at startup) cannot be heard.
 
 ## Strongly recommended
 
 - **Back up your world** before trying it. Deleting is permanent.
-- Speech recognition misheard words will trigger deletions. Set a wake word, for example
-  `/voicevanish wakeword delete`, so only "delete stone" works and normal talking is safe.
-- Words like "water", "grass", "dirt", "sand", "fire" are blocks, so casual chat will trigger them
-  without a wake word.
+- Words like "water", "grass", "dirt", "sand", "fire" are blocks, so normal chat will trigger them.
+  Use `/voicevanish off` when you want to talk freely.
 
 ## Known limits
 
@@ -66,6 +71,9 @@ Settings are saved in `config/voicevanish.json`.
   clear can take a few seconds to spread outward.
 - Chests and similar blocks may drop their items when removed.
 - Air, items on the ground, players, XP orbs and a few technical entities are ignored on purpose.
-- Vosk's small model is decent but not perfect; unusual names ("deepslate", "tuff") may be misheard.
+- Vosk's small model only knows common English words, so unusual names ("deepslate", "tuff") may not be
+  heard at all. A bigger model (e.g. `vosk-model-en-us-0.22-lgraph` from the same page, placed in the
+  same `model` folder) knows more words and is more accurate, but is larger and slower to load.
+- `useGrammar` in `config/voicevanish.json` turns names-only listening off if it ever misbehaves.
 - Vosk's native libraries are loaded from inside the mod jar. If the log says the native library
   could not load, tell me the error and I will adjust how it is bundled.

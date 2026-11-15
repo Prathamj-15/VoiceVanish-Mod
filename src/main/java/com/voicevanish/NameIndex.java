@@ -50,6 +50,13 @@ public final class NameIndex {
         VoiceVanishMod.LOGGER.info("Name index ready: {} block names, {} mob names", blocks.size(), entities.size());
     }
 
+    /** Every spoken block and mob name, used to tell the speech recognizer what to listen for. */
+    public Set<String> spokenNames() {
+        Set<String> all = new HashSet<>(blocks.keySet());
+        all.addAll(entities.keySet());
+        return all;
+    }
+
     private void alias(String spoken, EntityType<?> type) {
         entities.computeIfAbsent(spoken, k -> new HashSet<>()).add(type);
     }

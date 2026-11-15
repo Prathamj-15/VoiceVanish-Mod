@@ -30,7 +30,10 @@ public class VoiceVanishMod implements ModInitializer {
         CONFIG = VanishConfig.load();
         Path modelDir = FabricLoader.getInstance().getConfigDir().resolve(MOD_ID).resolve("model");
         SPEECH.load(modelDir);
-        ServerLifecycleEvents.SERVER_STARTED.register(server -> NAMES.build());
+        ServerLifecycleEvents.SERVER_STARTED.register(server -> {
+            NAMES.build();
+            SPEECH.setVocabulary(NAMES.spokenNames());
+        });
         ServerTickEvents.END_SERVER_TICK.register(server -> Vanisher.tick());
         ServerPlayConnectionEvents.DISCONNECT.register((handler, server) -> {
             UUID id = handler.getPlayer().getUuid();
@@ -47,13 +50,6 @@ public class VoiceVanishMod implements ModInitializer {
         if (!CONFIG.enabled || text == null || text.isBlank()) return;
         String heard = text.toLowerCase().trim();
         if (CONFIG.showHeard) player.sendMessage(Text.literal("🎙 " + heard), true);
-        String wake = CONFIG.wakeWord;
-        if (!wake.isEmpty()) {
-            int idx = heard.indexOf(wake);
-            if (idx < 0) return;
-            heard = heard.substring(idx + wake.length()).trim();
-            if (heard.isEmpty()) return;
-        }
         List<NameIndex.Target> targets = NAMES.match(heard);
         long now = System.currentTimeMillis();
         for (NameIndex.Target target : targets) {

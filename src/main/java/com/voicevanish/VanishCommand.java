@@ -2,12 +2,12 @@ package com.voicevanish;
 
 import com.mojang.brigadier.CommandDispatcher;
 import com.mojang.brigadier.arguments.IntegerArgumentType;
-import com.mojang.brigadier.arguments.StringArgumentType;
+import com.mojang.brigadier.arguments.DoubleArgumentType;
 import net.minecraft.server.command.CommandManager;
 import net.minecraft.server.command.ServerCommandSource;
 import net.minecraft.text.Text;
 
-/** /voicevanish on | off | status | radius <chunks> | wakeword <word> | wakeword off | heard on|off */
+/** /voicevanish on | off | status | radius <chunks> | confidence <0-1> | heard on|off */
 public final class VanishCommand {
     private VanishCommand() {}
 
@@ -30,7 +30,8 @@ public final class VanishCommand {
                     VanishConfig c = VoiceVanishMod.CONFIG;
                     reply(ctx.getSource(), "enabled=" + c.enabled
                             + ", radius=" + c.radiusChunks + " chunks"
-                            + ", wakeWord=" + (c.wakeWord.isEmpty() ? "(none)" : c.wakeWord)
+                            + ", minConfidence=" + c.minConfidence
+                            + ", namesOnlyListening=" + c.useGrammar
                             + ", speechModelLoaded=" + VoiceVanishMod.SPEECH.isReady());
                     return 1;
                 }))
@@ -43,20 +44,15 @@ public final class VanishCommand {
                                             + " chunks. (Only chunks the server has loaded are affected.)");
                                     return 1;
                                 })))
-                .then(CommandManager.literal("wakeword")
-                        .then(CommandManager.literal("off").executes(ctx -> {
-                            VoiceVanishMod.CONFIG.wakeWord = "";
-                            VoiceVanishMod.CONFIG.save();
-                            reply(ctx.getSource(), "Wake word removed. Any block or mob name works now.");
-                            return 1;
-                        }))
-                        .then(CommandManager.argument("word", StringArgumentType.greedyString()).executes(ctx -> {
-                            VoiceVanishMod.CONFIG.wakeWord = StringArgumentType.getString(ctx, "word");
-                            VoiceVanishMod.CONFIG.save();
-                            reply(ctx.getSource(), "Wake word set to \"" + VoiceVanishMod.CONFIG.wakeWord
-                                    + "\". Say e.g. \"" + VoiceVanishMod.CONFIG.wakeWord + " stone\".");
-                            return 1;
-                        })))
+                .then(CommandManager.literal("confidence")
+                        .then(CommandManager.argument("value", DoubleArgumentType.doubleArg(0.0, 1.0))
+                                .executes(ctx -> {
+                                    VoiceVanishMod.CONFIG.minConfidence = DoubleArgumentType.getDouble(ctx, "value");
+                                    VoiceVanishMod.CONFIG.save();
+                                    reply(ctx.getSource(), "Minimum confidence set to " + VoiceVanishMod.CONFIG.minConfidence
+                                            + ". Lower it if words are missed, raise it if things vanish by mistake.");
+                                    return 1;
+                                })))
                 .then(CommandManager.literal("heard")
                         .then(CommandManager.literal("on").executes(ctx -> {
                             VoiceVanishMod.CONFIG.showHeard = true;

@@ -1,5 +1,6 @@
 package com.voicevanish;
 
+import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
@@ -9,19 +10,38 @@ import org.vosk.LogLevel;
 import org.vosk.Model;
 import org.vosk.Recognizer;
 
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.HashSet;
 import java.util.Map;
+import java.util.Set;
+import java.util.TreeSet;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.stream.Stream;
 
-/** Offline speech-to-text using Vosk. One recognizer per player so voices never get mixed. */
+/**
+ * Offline speech-to-text using Vosk. One recognizer per player so voices never get mixed.
+ *
+ * Accuracy: instead of letting Vosk guess from the whole English dictionary (which turns "stone"
+ * into "lead stone"), it is told to listen ONLY for Minecraft block and mob names. Everything else
+ * becomes "[unk]" and is ignored. Words the recognizer is unsure about are dropped as well.
+ */
 public class SpeechService {
     private static final float SAMPLE_RATE = 16000f;
+    private static final String UNKNOWN = "[unk]";
+
     private Model model;
+    /** Words the loaded model knows. Names containing other words cannot be recognized. */
+    private Set<String> lexicon;
+    /** JSON list of phrases handed to Vosk, or null to listen to everything. */
+    private volatile String grammarJson;
     private final Map<UUID, Recognizer> recognizers = new ConcurrentHashMap<>();
 
-    public boolean isReady() { return model != null; }
+    public boolean isReady() {
+        return model != null;
+    }
 
     public void load(Path modelDir) {
         if (!Files.isDirectory(modelDir.resolve("am"))) {
@@ -37,38 +57,138 @@ public class SpeechService {
         } catch (Throwable t) {
             VoiceVanishMod.LOGGER.error("Could not load the Vosk speech model", t);
             model = null;
+            return;
+        }
+        loadLexicon(modelDir.resolve("graph").resolve("words.txt"));
+    }
+
+    private void loadLexicon(Path wordsFile) {
+        if (!Files.isRegularFile(wordsFile)) {
+            VoiceVanishMod.LOGGER.warn("No {} found, cannot check which names the model understands.", wordsFile);
+            return;
+        }
+        Set<String> words = new HashSet<>();
+        try (Stream<String> lines = Files.lines(wordsFile, StandardCharsets.UTF_8)) {
+            lines.forEach(line -> {
+                int space = line.indexOf(' ');
+                if (space > 0) words.add(line.substring(0, space));
+            });
+            lexicon = words;
+        } catch (Exception e) {
+            VoiceVanishMod.LOGGER.warn("Could not read the model's word list", e);
         }
     }
 
-    /** Feed one decoded voice frame (48 kHz, 16-bit mono, as given by Simple Voice Chat). */
+    /**
+     * Tells the recognizer which names to listen for. Call once after all blocks and mobs exist
+     * (server start), before players speak.
+     */
+    public void setVocabulary(Set<String> names) {
+        if (model == null) return;
+        if (!VoiceVanishMod.CONFIG.useGrammar) {
+            grammarJson = null;
+            VoiceVanishMod.LOGGER.info("Names-only listening is off, using full dictionary.");
+            return;
+        }
+
+        Set<String> phrases = new TreeSet<>();
+        int skipped = 0;
+        StringBuilder examples = new StringBuilder();
+        for (String name : names) {
+            if (!name.matches("[a-z]+( [a-z]+)*")) {
+                skipped++;
+                continue;
+            }
+            String[] words = name.split(" ");
+            if (!allKnown(words)) {
+                skipped++;
+                if (examples.length() < 160) examples.append(name).append(", ");
+                continue;
+            }
+            phrases.add(name);
+
+            // Plural of the last word: "zombies", "oak logs"
+            String last = words[words.length - 1];
+            for (String plural : new String[]{last + "s", last + "es"}) {
+                if (lexicon == null || lexicon.contains(plural)) {
+                    words[words.length - 1] = plural;
+                    phrases.add(String.join(" ", words));
+                }
+            }
+        }
+        phrases.add(UNKNOWN);
+
+        JsonArray array = new JsonArray();
+        for (String phrase : phrases) array.add(phrase);
+        grammarJson = array.toString();
+
+        VoiceVanishMod.LOGGER.info("Listening for {} names ({} skipped because the speech model has no word for them{}).",
+                phrases.size() - 1, skipped, examples.length() == 0 ? "" : ", e.g. " + examples);
+    }
+
+    private boolean allKnown(String[] words) {
+        if (lexicon == null) return true;
+        for (String w : words) {
+            if (!lexicon.contains(w)) return false;
+        }
+        return true;
+    }
+
+    private Recognizer createRecognizer() {
+        try {
+            String grammar = grammarJson;
+            Recognizer rec = grammar == null
+                    ? new Recognizer(model, SAMPLE_RATE)
+                    : new Recognizer(model, SAMPLE_RATE, grammar);
+            rec.setWords(true); // gives a confidence value for every word
+            return rec;
+        } catch (Exception e) {
+            VoiceVanishMod.LOGGER.error("Could not create recognizer", e);
+            return null;
+        }
+    }
+
+    /**
+     * Feed one decoded voice frame (48 kHz, 16-bit mono, as given by Simple Voice Chat).
+     * Runs on the voice chat thread, never touches the world directly.
+     *
+     * @param endOfSpeech true when the player stopped talking (empty microphone packet)
+     */
     public void feed(ServerPlayerEntity player, short[] pcm48k, boolean endOfSpeech) {
         if (model == null) return;
-        Recognizer rec = recognizers.computeIfAbsent(player.getUuid(), id -> {
-            try {
-                return new Recognizer(model, SAMPLE_RATE);
-            } catch (Exception e) {
-                VoiceVanishMod.LOGGER.error("Could not create recognizer", e);
-                return null;
-            }
-        });
+
+        Recognizer rec = recognizers.computeIfAbsent(player.getUuid(), id -> createRecognizer());
         if (rec == null) return;
+
         String json = null;
         synchronized (rec) {
             if (pcm48k != null && pcm48k.length >= 3) {
                 byte[] bytes = downsampleTo16kBytes(pcm48k);
-                if (rec.acceptWaveForm(bytes, bytes.length)) json = rec.getResult();
+                if (rec.acceptWaveForm(bytes, bytes.length)) {
+                    json = rec.getResult();
+                }
             }
-            if (json == null && endOfSpeech) json = rec.getFinalResult();
+            if (json == null && endOfSpeech) {
+                json = rec.getFinalResult();
+            }
         }
+
         if (json != null) {
             String text = extractText(json);
-            if (!text.isBlank()) player.getServer().execute(() -> VoiceVanishMod.onSpeech(player, text));
+            if (!text.isBlank()) {
+                // Jump to the server thread before touching Minecraft.
+                player.getServer().execute(() -> VoiceVanishMod.onSpeech(player, text));
+            }
         }
     }
 
     public void release(UUID id) {
         Recognizer rec = recognizers.remove(id);
-        if (rec != null) synchronized (rec) { rec.close(); }
+        if (rec != null) {
+            synchronized (rec) {
+                rec.close();
+            }
+        }
     }
 
     /** 48 kHz -> 16 kHz by averaging each group of 3 samples, then little-endian 16-bit bytes. */
@@ -84,11 +204,27 @@ public class SpeechService {
         return out;
     }
 
+    /** Keeps only confidently recognized, known words. */
     private static String extractText(String json) {
         try {
             JsonObject obj = JsonParser.parseString(json).getAsJsonObject();
-            JsonElement text = obj.get("text");
-            return text == null ? "" : text.getAsString();
+            JsonElement words = obj.get("result");
+            if (words == null || !words.isJsonArray()) {
+                // No per-word info available: fall back to the plain text.
+                JsonElement text = obj.get("text");
+                return text == null ? "" : text.getAsString().replace(UNKNOWN, "").trim();
+            }
+            double min = VoiceVanishMod.CONFIG.minConfidence;
+            StringBuilder out = new StringBuilder();
+            for (JsonElement el : words.getAsJsonArray()) {
+                JsonObject w = el.getAsJsonObject();
+                String word = w.get("word").getAsString();
+                double conf = w.has("conf") ? w.get("conf").getAsDouble() : 1.0;
+                if (UNKNOWN.equals(word) || conf < min) continue;
+                if (out.length() > 0) out.append(' ');
+                out.append(word);
+            }
+            return out.toString();
         } catch (Exception e) {
             return "";
         }

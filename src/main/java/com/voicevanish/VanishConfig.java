@@ -16,10 +16,13 @@ public class VanishConfig {
     private static final Path FILE = FabricLoader.getInstance().getConfigDir().resolve("voicevanish.json");
     public boolean enabled = true;
     public int radiusChunks = 12;
-    public String wakeWord = "";
     public int chunksPerTick = 6;
     public int cooldownMs = 2500;
     public boolean showHeard = true;
+    /** Only listen for block and mob names (much more accurate). Turn off only if this misbehaves. */
+    public boolean useGrammar = true;
+    /** Ignore words the recognizer is less sure about than this (0.0 to 1.0). Higher = fewer false triggers. */
+    public double minConfidence = 0.6;
 
     public static VanishConfig load() {
         if (Files.exists(FILE)) {
@@ -51,7 +54,6 @@ public class VanishConfig {
         radiusChunks = Math.max(1, Math.min(64, radiusChunks));
         chunksPerTick = Math.max(1, Math.min(64, chunksPerTick));
         cooldownMs = Math.max(0, cooldownMs);
-        if (wakeWord == null) wakeWord = "";
-        wakeWord = wakeWord.trim().toLowerCase();
+        minConfidence = Math.max(0.0, Math.min(1.0, minConfidence));
     }
 }
