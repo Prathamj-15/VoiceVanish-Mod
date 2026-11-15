@@ -13,7 +13,9 @@ import org.vosk.Recognizer;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.TreeSet;
@@ -28,7 +30,7 @@ import java.util.stream.Stream;
  * into "lead stone"), it is told to listen ONLY for Minecraft block and mob names. Everything else
  * becomes "[unk]" and is ignored. Words the recognizer is unsure about are dropped as well.
  */
-public class SpeechService {
+public class SpeechService implements SpeechBackend {
     private static final float SAMPLE_RATE = 16000f;
     private static final String UNKNOWN = "[unk]";
 
@@ -99,20 +101,31 @@ public class SpeechService {
                 skipped++;
                 continue;
             }
-            String[] words = name.split(" ");
-            if (!allKnown(words)) {
+            // Words the model does not know are split into words it does: "deepslate" -> "deep slate".
+            List<String> spoken = new ArrayList<>();
+            boolean ok = true;
+            for (String word : name.split(" ")) {
+                List<String> parts = lexicon == null ? List.of(word) : splitIntoKnown(word);
+                if (parts == null) {
+                    ok = false;
+                    break;
+                }
+                spoken.addAll(parts);
+            }
+            if (!ok) {
                 skipped++;
                 if (examples.length() < 160) examples.append(name).append(", ");
                 continue;
             }
-            phrases.add(name);
+            phrases.add(String.join(" ", spoken));
 
             // Plural of the last word: "zombies", "oak logs"
-            String last = words[words.length - 1];
+            String last = spoken.get(spoken.size() - 1);
             for (String plural : new String[]{last + "s", last + "es"}) {
                 if (lexicon == null || lexicon.contains(plural)) {
-                    words[words.length - 1] = plural;
-                    phrases.add(String.join(" ", words));
+                    List<String> copy = new ArrayList<>(spoken);
+                    copy.set(copy.size() - 1, plural);
+                    phrases.add(String.join(" ", copy));
                 }
             }
         }
@@ -126,12 +139,26 @@ public class SpeechService {
                 phrases.size() - 1, skipped, examples.length() == 0 ? "" : ", e.g. " + examples);
     }
 
-    private boolean allKnown(String[] words) {
-        if (lexicon == null) return true;
-        for (String w : words) {
-            if (!lexicon.contains(w)) return false;
+    /**
+     * The word itself if the model knows it, otherwise the best split into two known words
+     * ("deepslate" -> deep + slate), or null if neither works.
+     */
+    private List<String> splitIntoKnown(String word) {
+        if (lexicon.contains(word)) return List.of(word);
+        List<String> best = null;
+        int bestScore = 0;
+        for (int cut = 3; cut <= word.length() - 3; cut++) {
+            String a = word.substring(0, cut);
+            String b = word.substring(cut);
+            if (lexicon.contains(a) && lexicon.contains(b)) {
+                int score = Math.min(a.length(), b.length());
+                if (score > bestScore) {
+                    bestScore = score;
+                    best = List.of(a, b);
+                }
+            }
         }
-        return true;
+        return best;
     }
 
     private Recognizer createRecognizer() {

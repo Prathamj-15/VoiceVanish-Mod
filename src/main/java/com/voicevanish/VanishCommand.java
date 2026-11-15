@@ -7,7 +7,7 @@ import net.minecraft.server.command.CommandManager;
 import net.minecraft.server.command.ServerCommandSource;
 import net.minecraft.text.Text;
 
-/** /voicevanish on | off | status | radius <chunks> | confidence <0-1> | heard on|off */
+/** /voicevanish on | off | status | radius <chunks> | delay <seconds> | sound on|off | confidence <0-1> | heard on|off */
 public final class VanishCommand {
     private VanishCommand() {}
 
@@ -30,9 +30,9 @@ public final class VanishCommand {
                     VanishConfig c = VoiceVanishMod.CONFIG;
                     reply(ctx.getSource(), "enabled=" + c.enabled
                             + ", radius=" + c.radiusChunks + " chunks"
-                            + ", minConfidence=" + c.minConfidence
-                            + ", namesOnlyListening=" + c.useGrammar
-                            + ", speechModelLoaded=" + VoiceVanishMod.SPEECH.isReady());
+                            + ", delay=" + c.delaySeconds + "s"
+                            + ", sound=" + c.playSound
+                            + ", speechEngine=" + VoiceVanishMod.SPEECH.describe());
                     return 1;
                 }))
                 .then(CommandManager.literal("radius")
@@ -44,6 +44,28 @@ public final class VanishCommand {
                                             + " chunks. (Only chunks the server has loaded are affected.)");
                                     return 1;
                                 })))
+                .then(CommandManager.literal("delay")
+                        .then(CommandManager.argument("seconds", IntegerArgumentType.integer(0, 120))
+                                .executes(ctx -> {
+                                    VoiceVanishMod.CONFIG.delaySeconds = IntegerArgumentType.getInteger(ctx, "seconds");
+                                    VoiceVanishMod.CONFIG.save();
+                                    reply(ctx.getSource(), "Things now vanish " + VoiceVanishMod.CONFIG.delaySeconds
+                                            + " seconds after the name is heard.");
+                                    return 1;
+                                })))
+                .then(CommandManager.literal("sound")
+                        .then(CommandManager.literal("on").executes(ctx -> {
+                            VoiceVanishMod.CONFIG.playSound = true;
+                            VoiceVanishMod.CONFIG.save();
+                            reply(ctx.getSource(), "Vanish sound is on.");
+                            return 1;
+                        }))
+                        .then(CommandManager.literal("off").executes(ctx -> {
+                            VoiceVanishMod.CONFIG.playSound = false;
+                            VoiceVanishMod.CONFIG.save();
+                            reply(ctx.getSource(), "Vanish sound is off.");
+                            return 1;
+                        })))
                 .then(CommandManager.literal("confidence")
                         .then(CommandManager.argument("value", DoubleArgumentType.doubleArg(0.0, 1.0))
                                 .executes(ctx -> {

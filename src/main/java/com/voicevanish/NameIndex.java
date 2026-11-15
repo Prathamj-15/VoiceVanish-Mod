@@ -1,6 +1,7 @@
 package com.voicevanish;
 
 import net.minecraft.block.Block;
+import net.minecraft.block.Blocks;
 import net.minecraft.entity.EntityType;
 import net.minecraft.registry.Registries;
 
@@ -14,6 +15,9 @@ import java.util.Set;
 
 /**
  * Turns registry ids into spoken names ("oak_log" -> "oak log") and finds them inside a sentence.
+ *
+ * Matching ignores spaces, so "deep slate", "deepslate" and "Deep-Slate" are all the same thing,
+ * and plurals ("pigs", "zombies") work too.
  */
 public final class NameIndex {
     /** One spoken name and everything it refers to (a name can be both a block and a mob, e.g. "tnt"). */
@@ -25,80 +29,93 @@ public final class NameIndex {
 
     private final Map<String, Set<Block>> blocks = new HashMap<>();
     private final Map<String, Set<EntityType<?>>> entities = new HashMap<>();
+    /** Name with the spaces removed -> the name ("deepslate bricks" -> key "deepslatebricks"). */
+    private final Map<String, String> compact = new HashMap<>();
     private int maxWords = 1;
 
     /** Call once the server has started so every mod's blocks and mobs are registered. */
     public void build() {
         blocks.clear();
         entities.clear();
+        compact.clear();
         maxWords = 1;
+
         for (Block block : Registries.BLOCK) {
             String path = Registries.BLOCK.getId(block).getPath();
             if (SKIP_BLOCKS.contains(path)) continue;
-            String name = path.replace('_', ' ');
-            blocks.computeIfAbsent(name, k -> new HashSet<>()).add(block);
-            maxWords = Math.max(maxWords, wordCount(name));
+            blocks.computeIfAbsent(path.replace('_', ' '), k -> new HashSet<>()).add(block);
         }
         for (EntityType<?> type : Registries.ENTITY_TYPE) {
             String path = Registries.ENTITY_TYPE.getId(type).getPath();
             if (SKIP_ENTITIES.contains(path)) continue;
-            String name = path.replace('_', ' ');
-            entities.computeIfAbsent(name, k -> new HashSet<>()).add(type);
-            maxWords = Math.max(maxWords, wordCount(name));
+            entities.computeIfAbsent(path.replace('_', ' '), k -> new HashSet<>()).add(type);
         }
-        alias("dragon", EntityType.ENDER_DRAGON);
+
+        // Easy-to-say names
+        entities.computeIfAbsent("dragon", k -> new HashSet<>()).add(EntityType.ENDER_DRAGON);
+        entities.computeIfAbsent("golem", k -> new HashSet<>()).addAll(Set.of(EntityType.IRON_GOLEM, EntityType.SNOW_GOLEM));
+        Set<Block> grass = blocks.computeIfAbsent("grass", k -> new HashSet<>());
+        grass.add(Blocks.GRASS_BLOCK);
+        grass.add(Blocks.SHORT_GRASS);
+        blocks.computeIfAbsent("cobble", k -> new HashSet<>()).add(Blocks.COBBLESTONE);
+
+        for (String name : allNames()) {
+            compact.putIfAbsent(name.replace(" ", ""), name);
+            maxWords = Math.max(maxWords, name.split(" ").length);
+        }
         VoiceVanishMod.LOGGER.info("Name index ready: {} block names, {} mob names", blocks.size(), entities.size());
     }
 
-    /** Every spoken block and mob name, used to tell the speech recognizer what to listen for. */
-    public Set<String> spokenNames() {
+    private Set<String> allNames() {
         Set<String> all = new HashSet<>(blocks.keySet());
         all.addAll(entities.keySet());
         return all;
     }
 
-    private void alias(String spoken, EntityType<?> type) {
-        entities.computeIfAbsent(spoken, k -> new HashSet<>()).add(type);
+    /** Every spoken block and mob name, used to tell the speech recognizer what to listen for. */
+    public Set<String> spokenNames() {
+        return allNames();
     }
 
     /** Finds every block / mob name in the sentence. Longest names win ("wither skeleton" beats "wither"). */
     public List<Target> match(String sentence) {
-        String[] words = sentence.toLowerCase().trim().split("\\s+");
+        String cleaned = sentence.toLowerCase().replaceAll("[^a-z]+", " ").trim();
+        if (cleaned.isEmpty()) return List.of();
+        String[] words = cleaned.split(" ");
+
         Map<String, Target> found = new LinkedHashMap<>();
+        // Spoken names can be split into more words than the registry id ("deep slate"), so look a bit further.
+        int window = maxWords + 2;
         int i = 0;
         while (i < words.length) {
-            boolean matched = false;
-            int longest = Math.min(maxWords, words.length - i);
-            for (int n = longest; n >= 1 && !matched; n--) {
-                String phrase = String.join(" ", java.util.Arrays.copyOfRange(words, i, i + n));
-                for (String candidate : variants(phrase)) {
-                    Set<Block> b = blocks.get(candidate);
-                    Set<EntityType<?>> e = entities.get(candidate);
-                    if (b != null || e != null) {
-                        found.putIfAbsent(candidate, new Target(candidate,
-                                b == null ? Set.of() : b, e == null ? Set.of() : e));
-                        i += n;
-                        matched = true;
+            int matchedLength = 0;
+            int longest = Math.min(window, words.length - i);
+            for (int n = longest; n >= 1 && matchedLength == 0; n--) {
+                StringBuilder joined = new StringBuilder();
+                for (int k = 0; k < n; k++) joined.append(words[i + k]);
+                for (String key : variants(joined.toString())) {
+                    String name = compact.get(key);
+                    if (name != null) {
+                        found.putIfAbsent(name, new Target(name,
+                                blocks.getOrDefault(name, Set.of()),
+                                entities.getOrDefault(name, Set.of())));
+                        matchedLength = n;
                         break;
                     }
                 }
             }
-            if (!matched) i++;
+            i += Math.max(1, matchedLength);
         }
         return new ArrayList<>(found.values());
     }
 
-    /** "zombies" -> "zombie", "slimes" -> "slime", "bees" -> "bee", "ladies" -> "lady" style endings. */
-    private static List<String> variants(String phrase) {
+    /** "zombies" -> "zombie", "pigs" -> "pig", "ladies" -> "lady" style endings. */
+    private static List<String> variants(String text) {
         List<String> out = new ArrayList<>(4);
-        out.add(phrase);
-        if (phrase.endsWith("ies") && phrase.length() > 3) out.add(phrase.substring(0, phrase.length() - 3) + "y");
-        if (phrase.endsWith("es") && phrase.length() > 2) out.add(phrase.substring(0, phrase.length() - 2));
-        if (phrase.endsWith("s") && phrase.length() > 1) out.add(phrase.substring(0, phrase.length() - 1));
+        out.add(text);
+        if (text.endsWith("ies") && text.length() > 3) out.add(text.substring(0, text.length() - 3) + "y");
+        if (text.endsWith("es") && text.length() > 2) out.add(text.substring(0, text.length() - 2));
+        if (text.endsWith("s") && text.length() > 1) out.add(text.substring(0, text.length() - 1));
         return out;
-    }
-
-    private static int wordCount(String name) {
-        return name.split(" ").length;
     }
 }

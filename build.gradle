@@ -25,6 +25,12 @@ dependencies {
     include("com.alphacephei:vosk:${project.vosk_version}") {
         transitive = false
     }
+
+    // Whisper speech recognition (whisper.cpp for Java). Brings its own native libraries for Windows, Linux and macOS.
+    implementation "io.github.givimad:whisper-jni:${project.whisper_version}"
+    include("io.github.givimad:whisper-jni:${project.whisper_version}") {
+        transitive = false
+    }
 }
 
 processResources {

@@ -22,19 +22,18 @@ public class VoiceVanishMod implements ModInitializer {
     public static final Logger LOGGER = LoggerFactory.getLogger(MOD_ID);
     public static VanishConfig CONFIG;
     public static final NameIndex NAMES = new NameIndex();
-    public static final SpeechService SPEECH = new SpeechService();
+    public static final SpeechHub SPEECH = new SpeechHub();
     private static final Map<String, Long> LAST_TRIGGER = new HashMap<>();
 
     @Override
     public void onInitialize() {
         CONFIG = VanishConfig.load();
-        Path modelDir = FabricLoader.getInstance().getConfigDir().resolve(MOD_ID).resolve("model");
-        SPEECH.load(modelDir);
+        SPEECH.load(FabricLoader.getInstance().getConfigDir().resolve(MOD_ID));
         ServerLifecycleEvents.SERVER_STARTED.register(server -> {
             NAMES.build();
             SPEECH.setVocabulary(NAMES.spokenNames());
         });
-        ServerTickEvents.END_SERVER_TICK.register(server -> Vanisher.tick());
+        ServerTickEvents.END_SERVER_TICK.register(Vanisher::tick);
         ServerPlayConnectionEvents.DISCONNECT.register((handler, server) -> {
             UUID id = handler.getPlayer().getUuid();
             SPEECH.release(id);
@@ -47,10 +46,21 @@ public class VoiceVanishMod implements ModInitializer {
 
     /** Called on the SERVER thread with whatever a player just said. */
     public static void onSpeech(ServerPlayerEntity player, String text) {
-        if (!CONFIG.enabled || text == null || text.isBlank()) return;
+        if (!CONFIG.enabled || text == null || text.isBlank() || player.isRemoved()) return;
         String heard = text.toLowerCase().trim();
-        if (CONFIG.showHeard) player.sendMessage(Text.literal("🎙 " + heard), true);
         List<NameIndex.Target> targets = NAMES.match(heard);
+
+        if (targets.isEmpty()) {
+            if (CONFIG.showHeard) {
+                String shown = heard.length() > 70 ? heard.substring(0, 70) + "..." : heard;
+                player.sendMessage(Text.literal("🎙 " + shown), true);
+            }
+            return;
+        }
+        if (targets.size() > CONFIG.maxNamesPerSentence) {
+            LOGGER.info("Ignored a clip that contained {} names (probably misheard): {}", targets.size(), heard);
+            return;
+        }
         long now = System.currentTimeMillis();
         for (NameIndex.Target target : targets) {
             Long last = LAST_TRIGGER.get(target.label());
